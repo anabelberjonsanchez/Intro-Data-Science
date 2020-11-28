@@ -1,0 +1,121 @@
+---
+title: "Assignment 4. Spatial Data"
+author: "Introduction to Data Science"
+date: "10/01/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = "")
+library(tidyverse)
+library(sf)
+library(rmapshaper)
+library(arvig)
+```
+
+
+##  A map of German counties
+
+1. Download spatial data on German administrative units from http://sg.geodatenzentrum.de/web_download/vg/vg1000-ew_3112/utm32s/shape/vg1000-ew_3112.utm32s.shape.ebenen.zip. Use R functions to (a) execute the download and (b) unzip the file.
+
+```{r}
+download.file(url="http://sg.geodatenzentrum.de/web_download/vg/vg1000-ew_3112/utm32s/shape/vg1000-ew_3112.utm32s.shape.ebenen.zip", destfile= "data.zip", method="libcurl")
+unzip("data.zip")
+```
+
+
+2. Import the county shapefile (VG1000_KRS.shp) into R.
+```{r}
+list.files()
+county <- st_read("vg1000-ew_3112.utm32s.shape.ebenen/vg1000-ew_ebenen/VG1000_KRS.shp")
+plot(county)
+```
+
+
+3. The map resolution is pretty high, which slows down plotting and computations. Reduce map complexity with the functionality of the rmapshaper package and keep 10% of the points. Work with the simplified shapefile from hereon.
+
+```{r}
+county_low <- ms_simplify(county, keep = 0.001)
+plot(county_low)
+```
+
+## Data on anti-refugee violence in Germany
+
+1. Get the arvig package from https://github.com/davben/arvig.
+
+```{r}
+library(arvig)
+data("arvig")
+```
+
+2. Filter out events that belong into the "other" category or are associated with more than one category. Furthermore, restrict the data to events that took place between 2014 and 2015.
+
+```{r}
+library(dplyr)
+new_arvig <- arvig %>%
+filter(date >= ("2014-01-01") & date <= ("2015-12-31"), !grepl("[\\&]|other",category_en))
+    
+```
+
+
+
+3. Provide a frequency table (or appropriate plot) of the total number of events (a) by category and (b) by state.
+
+```{r}
+new_arvig %>% ggplot(aes(category_en, stat = "count",
+              fill = state)) + theme_minimal() +
+              geom_bar()
+              
+table(new_arvig$state, new_arvig$category_en)
+
+```
+
+
+
+3. Turn the arvig dataset into an sf object using the st_as_sf function and the string "+proj=longlat +ellps=GRS80 +datum=WGS84 +no_defs" to define the CRS.
+
+```{r}
+
+arvig_sf <- st_as_sf(new_arvig, coords = 
+              c("longitude", "latitude"), 
+              crs = "+proj=longlat +ellps=GRS80 +datum=WGS84 +no_defs", agr = "constant")
+arvig_sf <- st_transform(arvig_sf, 26978)
+
+```
+
+
+5. Plot the count map and add the events as dots (colored by type). You might have to transform the CRS of the events data to make it compatible with the county spatial data.
+
+```{r}
+
+ggplot(county_low)  + geom_sf() +
+      theme_minimal() + geom_sf(data =arvig_sf, 
+      mapping = aes(col = category_en))
+
+```
+
+6. Finally, use both spatial objects to generate a count variable of the events by county. Normalize it by population using the EWZ variable in the county data. Provide a table of the 10 counties with the highest number of events per 100k inhabitants.
+
+```{r}
+
+arvig_sf <- st_transform(arvig_sf, 26978)
+county_low <- st_transform(county_low, 26978)
+join <- st_intersection(x = county_low, y = arvig_sf) 
+
+# Generate the count variable by county 
+# Normalize it by population 
+# Sort by count variable 
+
+join <- as.data.frame(join)
+final <- join %>% group_by(GEN, EWZ) %>% 
+                  tally() %>% 
+                  mutate(stats = n/EWZ*100,000) %>%
+                  arrange(desc(stats))
+
+final[1:10,]
+
+rm(joint2)
+```
+
+

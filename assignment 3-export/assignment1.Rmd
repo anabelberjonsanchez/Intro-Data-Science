@@ -1,0 +1,128 @@
+---
+title: "Assignment 1. Databasing"
+author: "Introduction to Data Science"
+date: "9/24/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = "")
+```
+
+We're going to be using event data harvested by Phil Schrodt (and a lot of C-code) from newswire stories about the Middle East. This event data has rows of the form
+```
+1979-04-15 ISRMIL JOR 190
+```
+which says that the Israeli military did an event of type 190 to Jordan. To understand what these events mean, there is a codebook with entries in the form
+```
+190 Use conventional military force, not specified below
+```
+Each such event type has a manually assigned conflict-cooperation score, described in another table with lines of the form
+```
+190 19 -10
+```
+which states that score 190 has 'top level' 19 (just the first two digits, indicating a coarser categorization) and is strongly negative -10. (The scale goes from -10 to 10.)
+
+## Talking to the DB
+
+First create a connection to the database file and ask for the names of the tables.
+
+```{r}
+library(DBI)
+levant<- dbConnect(RSQLite::SQLite(), dbname = "levant.cameo.sqlite3")
+dbListTables(levant)
+```
+
+## Wrapping things up
+
+There are three tables of interest (you don't care about anything beginning `sqlite_`). And now you know what they are called, use `dplyr` to make them appear as if they were data.frames
+
+```{r}
+library(dplyr)
+db_description <- tbl(levant, "description")
+db_event <- tbl(levant, "event")
+db_score <- tbl(levant, "score")
+```
+
+## Scoring the events
+
+To get conflict scores for events in this period, join the score table to the events table with a left join. Hint: think about which table should be left and why.
+
+```{r}
+dbListFields(levant,"event")
+dbListFields(levant,"score")
+jointtables<- left_join(db_event, db_score, by = c("code" = "code")) %>%
+  select(date,target,source, score,toplevel)
+jointtables
+```
+## Second Intifada
+
+We can date the Second Intifada from 27th of September 2000 to 8th of February 2005. Create and name these two R dates (Hint: R works well with strings in ISO-standard date format) and use them to filter your copy of the events table to contain only events in the Second Intifada.
+
+```{r}
+jointtables$date <- as.Date(jointtables$date, format= "%Y-%m-%d")
+secondintifada<-jointtables %>%
+ select(date,target,source, score,toplevel) %>%
+  filter(date >= ("2000-09-27") & date <= ("2005-02-08"))
+secondintifada
+```
+
+Now `collect` the result so you have it as a regular R data.frame. 
+```{r}
+collect(jointtables)
+collect(secondintifada)
+```
+## Working in R
+
+Next, filter it further to include only events where an source actor with name beginning ISR, e.g. ISRMIL or ISRGOV does something to a target actor beginning with PAL. You could use `filter` with `grepl` or a test of the first three letters. This is what conflict scholars call 'the Israel-Palestine dyad'.
+
+If you prefer, you could instead generate the Palestine-Israel dyad which tracks events done by Palestinian actors to Israeli actors.
+
+```{r}
+dyad  <- filter(secondintifada,!grepl("^ISR", source))
+
+dyad <- secondintifada %>% 
+                filter(sql("source LIKE 'ISR'
+                AND target LIKE 'PAL'"))
+  
+dyad<-collect(dyad)
+
+```
+
+## Time series
+
+Finally we will visualize the conflict levels in this dyad. This will be less noisy if you aggregate temporally. To aggregate events by week, use cut. If your data.frame is called `evscore` and has a column called `date` then
+
+```
+evscore <- mutate(evescore, 
+  week = cut(as.Date(date), breaks = "week"),
+  week = as.Date(as.character(week)))
+evscore
+```
+where we have ensured date really is a date  with `as.Date` (sometimes classes get mixed up in and out of databases), and created a nominal variable to represent dates that are in the same week using `cut.Date`. Then we have taken advantage of the fact that this variable is named after the date of the *first* day of the week it represents, so we can turn that into a character (it's a factor label after `cut`), and then back into a proper date.
+
+```{r}
+
+evscore <- mutate(dyad, 
+  week = cut(as.Date(date), breaks = "week"),
+  week = as.Date(as.character(week)))
+evscore<- as.data.frame(evscore)
+evscore %>% head()
+```
+
+Lastly, average the score in each week of your dyad and plot the time series of conflict.
+
+```{r}
+library(ggplot2)
+average_score <- aggregate(score ~ week, evscore, mean)
+head(average_score)
+
+av_score_plot <-plot(as.POSIXct(average_score$week),average_score$score, type = "l", las=1, main="Weekly Average Score", xlab = "Week", ylab = "Score")
+```
+
+This is the kind of data and graphic that conflict forecasters use for prediction in governments around the world. And now we can do it too.
+
+## Handing it all in
+
+This time around, just compile this document with code and answers and upload it to moodle. Specifically, I'll be looking for a single knitted pdf, Word, or html file. I think that's probably fancy enough, while we get used to the cloud business. 

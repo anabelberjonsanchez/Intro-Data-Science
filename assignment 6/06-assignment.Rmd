@@ -1,0 +1,217 @@
+---
+title: "Assignment 6. Web Scraping"
+author: "Anabel Berjon Sanchez"
+date: "15 Oct 2020"
+output: html_document
+---
+
+
+### 0. Preparation: Load packages
+
+```{r, message = FALSE}
+library(tidyverse) 
+library(rvest)
+library(stringr)
+```
+
+
+
+<br>
+
+### 1. The ultimate regular expression (1pt)
+
+Find a regular expression that matches anything of any length! Prove that it works using several examples.
+
+
+```{r, eval = TRUE}
+# enter your R code here
+
+y<-"Europe also is bracing for a dark winter as the pandemic has entered a dangerous phase across the continent"
+
+y<-c("Europe also is bracing for a dark winter as the pandemic has entered a dangerous phase across the continent", "supercalifragilisticexpialidocious") 
+
+# Match all words with 1,2 and 3 letters
+length1<- str_extract_all(y,"\\b[a-zA-Z0-9]{1,3}\\b")
+length1
+
+#Match all words with 4 letters
+lenght2<-str_extract_all(y,"\\b[a-zA-Z]{4}\\b")
+lenght2
+
+#Match all words longer than 5 letters
+lenght3<-str_extract_all(y,"\\b[a-zA-Z]{6,}\\b")
+lenght3
+
+x<-"It's supercalifragilisticexpialidocious. Even though the sound of it. Is. something quite atrocious. If you say it loud enough. You'll always sound precocious. Supercalifragilisticexpialidocious"
+
+#Match all words longer than 12 letters
+leght4<-str_extract_all(x,"\\b[a-zA-Z]{12,}\\b")
+leght4
+```
+
+
+<span style="color:blue">
+If you want to add a comment outside the R code block, use this <span> block! (just copy the <span>...</span> lines for future comments in the Rmd file.)
+</span>
+
+<br>
+
+### 2. Finding strings that are matched by regular expressions (2pts)
+
+Describe the types of strings that conform to the following regular expressions and construct an example that is matched by the regular expression.
+
+a. [0-9]+\\$
+b. b[a-z]{1,4}
+c. .*?\\.txt$
+d. \\d{2}/\\d{2}/\\d{4}
+e. <(.+?)>.+?</\\1>
+
+```{r}
+# Example
+str_extract_all("Phone 150$, TV 690$", "[0-9]+\\$") # Answer: this regex describes prices in dollars
+
+# enter your R code here to solve b. to e.
+
+#B: this regex extracts the words in the string which have the length of 1 to 4 letters. 
+stringa<-c("This is President Trump shifted the way both parties talk about trade, immigration and deficits")
+stringa<-str_extract_all(stringa, "\\b[a-z]{1,4}")
+stringa
+
+#C:Matchs strings that end with ‘.txt’
+stringc<-c("Mydoc.exe", "Mydoc2.exe", "Mydoc3.txt")
+str_extract_all(stringc,".*?\\.txt$")
+
+#D: Matchs digits with date format of 00/00/0000
+stringd<-c("000/3/123","10/02/1993","14/9/1960 ","28/12\1989", "mom" )
+stringd <- str_extract(stringd,"\\d{2}/\\d{2}/\\d{4}")
+stringd
+
+#E: Matchs any string which starts and ends with tag (<>)
+stringe<- c("<tag> anabel/>","<tag>berjon</tag>","<tag sanchez /tag>")
+stringe <- str_extract(stringe,"<(.+?)>.+?</\\1>")
+stringe
+```
+
+
+<br>
+
+### 3. Manipulating an email address (2pts)
+
+Consider the mail address  datalover89[at]aol[dot]com. Now, complete the following tasks.
+
+a. Transform the string to a standard mail format (i.e., replace the square brackets with the appropriate symbols) using regular expressions.
+b. Now extract the local-part ("datalover89") and the domain ("aol") separately. 
+
+```{r}
+#A: Replace email address with regex: datalover89[at]aol[dot]com
+email <- "datalover89[at]aol[dot]com"%>%
+str_replace("\\[at]", "@" )%>%
+str_replace("\\[dot]", "\\.")
+
+#B:
+domain<-gsub(".*@|\\..*", "", email)
+domain
+local<-gsub("@.*", "", email)
+local
+```
+
+<br>
+
+### 4. A secret message (2pts)
+The following code hides a secret message. Crack it with R and regular expressions. Once you have cracked it, try to collapse the solution in one single string. <i>Hint: Some of the characters are more revealing than others!</i>
+
+```{r}
+secret <- "clcopCow1zmstc0d87wnkig7OvdicpNuggvhryn92Gjuwczi8hqrfpRxs5Aj5dwpn0TanwoUwisdij7Lj8kpf03AT5Idr3coc0bt7yczjatOaootj55t3Nj3ne6c4Sfek.r1w1YwwojigOd6vrfUrbz2.2bkAnbhzgv4R9i05zEcrop.wAgnb.RqoE65fGEa1otfb7wXm24k.6t3sH9zqe5fy89n6Ed5t9kc4fR905gmc4Ogxo5nhk!gr"
+
+# enter your R code here
+
+secret <- c("clcopCow1zmstc0d87wnkig7OvdicpNuggvhryn92Gjuwczi8hqrfpRxs5Aj5dwpn0TanwoUwisdij7Lj8kpf03AT5Idr3coc0bt7yczjatOaootj55t3Nj3ne6c4Sfek.r1w1YwwojigO
+d6vrfUrbz2.2bkAnbhzgv4R9i05zEcrop.wAgnb.SqoU65fPa1otfb7wEm24k6t3sR9zqe5
+fy89n6Nd5t9kc4fE905gmc4Rgxo5nhDk!gr")
+
+message <- str_extract_all(secret,"[[:upper:]]")
+
+message
+```
+
+
+
+<br>
+
+### 5. Scraping newspaper headlines (3pts)
+
+Use Selectorgadget and R to scrape the article headlines from https://www.theguardian.com/international. 
+
+a. Present the first 6 observations from the uncleaned vector of scraped headlines.
+
+b. Tidy the text data (e.g., remove irrelevant characters if there are any, and get rid of duplicates).
+
+c. Identify the 5 most frequent words in all headlines. (Hint: use a string processing function from the stringr package to split up the headings word by word, and use an empty space, " ", as splitting pattern.)
+
+
+```{r}
+guardian_url <- "https://www.theguardian.com/international"
+html <- read_html(guardian_url)
+cast <- html_nodes(html, ".js-headline-text , .fc-sublink__link")
+
+# First 6 observations 
+cast <- cast[1:6]
+cast
+
+# Tidy
+cast <- html_text(cast, trim = TRUE)
+cast
+
+# 4 most frequent words
+cast1 <- str_split(cast, " ")
+
+cast1 <- unlist(cast1) 
+cast1 <- sapply(cast1, paste0, collapse=" ")
+
+table(cast1)
+
+sort(table(cast1), decreasing=T)[1:4]
+```
+
+
+<br>
+
+### 6. Towers of the world (3pts)
+
+Scrape the table "Towers proposed or under construction" from https://en.wikipedia.org/wiki/List_of_tallest_towers.
+
+a. Present the first 6 rows of the generated data frame.
+
+b. How many of those buildings are planned for observation purposes?
+
+c. What is the sum of the planned pinnacle height of all those towers? 
+
+```{r}
+
+tow_url <- read_html("https://en.wikipedia.org/wiki/List_of_tallest_towers")
+tow_all <- html_table(tow_url, header = TRUE, fill = TRUE)
+tow <- tow_all[[7]]
+
+# First 6 observations 
+tow[1:6]
+
+#B: Correcting craping error 
+tow$Function[tow$Function == "proposed"] <- "observation / telecommunications" 
+
+# Buildings planned for observation purposes 
+tow %>% filter(grepl("observation", Function))
+
+# Answer:8 buildings are planned for observation purposes: 3 are for observation and/or telecommunications, and 1 for observation and/orleisure and/or exhibition.
+
+# C: Sum of planned pinnacle height of all towers
+tow1 <- tow 
+tow1$`Pinnacle height` <- gsub("m", "", 
+                              tow1$`Pinnacle height`)
+tow1 <- tow1 %>% mutate(`Pinnacle height` =
+                as.numeric(tow1$`Pinnacle height`))
+sumpin <- sum(tow1$`Pinnacle height`)
+sumpin
+```
+
+<br>
+

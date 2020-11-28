@@ -1,0 +1,510 @@
+---
+title: "Assignment"
+author: "Week 5"
+date: "10/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = "")
+```
+
+In this assignment we'll consider the scaling analysis from the 
+slides: the New York Times German and US party scaling at the end.
+
+For convenience, computational and otherwise, we'll use the `ca` 
+package to do our scaling. For reference, this is the least squares
+version of the model shown in the slides and consequently tends 
+to give very similar results but rather quicker. So now is a good 
+time to install the `ca` package (do it at the console, just once, not in this document).
+
+Our data will be the results of a long running large scale 
+human text analysis project once called the Comparative 
+Manifestos Project (CMP) and subsequently various other things
+that those of us who work in this area have forgotten. So we'll 
+call it the CMP data. More about it can be found over here at the WZB: https://manifesto-project.wzb.eu
+
+In short, lots of coders identify policy assertions in 
+the platforms / manifestos / statements of policy preference 
+of parties across Europe, North and South American, and a few other places, and code them into one of about 56 categories
+(this changes over time but there are always a core 56). It's a 
+historical record and generates count data of the kind that a 
+topic model or sentence classifier might automate, e.g. in 2002 the German Free Democrat Party had 14 sentences assigned to policy category `101` (Foreign Special Relationships: Positive) 
+out of 1982 that were codable.
+
+The gory details of the categories, parties, etc. can be found 
+in the pdf codebook in the `data` folder which you can peruse 
+at your leisure, but need not detain us now.
+
+This kind of count data is also exactly the same sort of data as would come out of dictionary based content analysis, or if we had counted words rather than categories or topics. Consequently it can be scaled just the same 
+way as we scaled the debate to infer speaker/document positions in class.
+
+We'll start by loading the data set, correcting a small coding 
+mistake, and turning the CMP's percentages back into the counts 
+they were originally so we can treat it like the document 
+feature matrix that it fundamentally is.
+
+But before we begin, a quick note: you should feel free to get help if you 
+are having trouble figuring out what the code is doing or how to adjust it.
+Lightly adjusting the existing code is quite sufficient for this assignment, 
+although impressive own coding is much appreciated.
+
+## The data
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ca)
+
+theme_set(theme_minimal())
+```
+
+
+
+```{r,message=FALSE}
+# Read in, ignoring the parse failures because they're on a
+# variable we won't use
+allcmp20 <- read_csv("data/MPDataset_MPDS2020a.csv")
+```
+
+Now to give a nice abbreviation to the Pirates. It should 
+probable be "ARGH", or "Avast!" or something, but we'll just make it "Pirates"
+```{r}
+allcmp20$partyabbrev[allcmp20$partyname == "Pirates"] <- "Pirates"
+```
+Now we'll re-inflate the counts and throw away all the electoral 
+and other info in the data that we won't use
+```{r}
+cmp20 <- allcmp20 %>%
+  select(edate, countryname, partyname, partyabbrev, total, peruncod,
+         matches("per\\d\\d\\d$")) %>% # per%d%d%d% are subcategories, so we ignore them
+  mutate(edate = as.Date(edate, format = "%d/%m/%Y"),
+         eyear = lubridate::year(edate), # make a nice year just in case we want to filter with it
+         label = paste(partyabbrev, eyear, sep = ":"), # for graphing
+         across(starts_with("per"), function(x) round(total * (x/100)))) %>% # inflate the counts
+  rename(uncoded = peruncod) # and rename the uncoded sentence counts
+```
+Phew. That was a fairly typical bit of data cleaning code, which 
+takes up a lot of data science-ing time. Study it a little 
+if you think this is in your future. But we'll just use it 
+below.
+
+The column `per101` is now the *count* of sentences coded into category 101. So, as noted above: 14 for the FDP in 2002. 
+Feel free to confirm that.
+
+## The metadata
+
+Now to pull in the labels corresponding to the meaning of each category. This is metadata, since it is a mapping from the obscure
+column header codes to two facts about each code.
+```{r,message=FALSE}
+itemcodes <- read_csv("data/itemcodes.csv")
+head(itemcodes)
+
+rile_right <- itemcodes$name[itemcodes$rile.valence == 1]
+rile_left <- itemcodes$name[itemcodes$rile.valence == -1]
+rile_none <- itemcodes$name[itemcodes$rile.valence == 0]
+
+head(rile_right)
+```
+Here we've got a table of basic information about the CMP's coding 
+scheme and also a "rile.valence". In this data there is a core set 
+of categories that the authors believe is the basis of left-right
+ideology measures. The categories in `rile_right` are the 
+categories whose emphasis indicates a more right position
+and `rile_left` a more left position. The `rile_none` categories
+are just the remainder that are coded, but not supposed to 
+be as important (or something. The codebook elaborates).
+We'll use them later.
+
+## Analysis: Germany
+
+This is historical data, but we'll start our analysis somewhat 
+arbitrarily at the beginning of the century.
+```{r}
+oldest <- as.Date("2000-01-01")
+```
+and focus on Germany.
+```{r}
+de <- filter(cmp20, edate > oldest, countryname == "Germany")
+
+de[1:3, 1:7]
+```
+Because we're not in `quanteda` we'll have to manage the 
+"docvars" and the document feature matrix info separately,
+so let's first pull out the dfm-like part: the counts
+```{r}
+de_counts <- select(de, starts_with("per"))
+
+de_counts[1:3, 1:7] # quick peek at the top left corner
+```
+and switch into a old-style `data.frame` representation that has
+ rownames and colnames like you remember before you knew anything 
+ about the tidyverse.
+```{r}
+de_mat <- data.matrix(de_counts)
+rownames(de_mat) <- de$label
+colnames(de_mat) <- itemcodes$name
+
+de_mat[1:3,1:2] # top left corner of our dfm equivalent
+```
+Looks like dfm, right? If we've got this kind of object available then 
+we're ready to scale.
+
+## Model 
+
+Now to scale these counts and see what they tell us about parties.
+We'll use `ca` rather than `wordfish` because we'd like to 
+be able to efficiently scale in multiple dimensions. So let's load 
+the package and run the scaling function, conveniently called 
+`ca` also.
+```{r}
+library(ca)
+
+mod1 <- ca(de_mat)
+```
+`mod1` has a lot of stuff in it. Of primary interest to use
+are the document positions "theta" and the word positions "beta".
+CA calls these row coordinates and column coordinates respectively
+(which makes sense) and these are tucked inside the model
+in matrix form. Let's get them out and take a look.
+```{r}
+betas <- mod1$colcoord
+thetas <- mod1$rowcoord
+
+dim(thetas) # documents by (surprisingly large numbers of) dimensions
+dim(betas) # features / policy categories by dimensions
+```
+Note: the positions of the i-th party in an election on the j-th dimension is the (i,j)-th element of `thetas`
+
+Now it's your turn. Extract the positions for the parties on the first dimension and sort the results. Do these positions seem 
+to make sense as ideological positions? If you don't have intuitions
+about German parties, borrow a nearby German (there are plenty
+locally) and ask them.
+```{r}
+
+#Data wrangling
+thetas_dim1 <- thetas %>% as.data.frame() %>% 
+  select(Dim1) %>% 
+  arrange(Dim1) %>% 
+  rename(position = Dim1)
+
+# Normal table sorted by position
+head(thetas_dim1)
+
+```
+Now make a histogram of these positions, and provide a one sentence 
+summary of what you see.
+```{r}
+#Dimension 1 Theta
+
+thetas_dim1 %>% ggplot(aes(x = position)) + 
+  geom_histogram(binwidth = 0.5)+
+  theme_minimal()
+```
+
+Summary:
+```
+Analyzing one theta dimension shows the position of the german parties overtime. Parties take postions between -1 and 2 but center right positions prevalence over extreme.
+```
+Now do the same for the `betas` on dimension 1:
+```{r}
+#Dimension 2 Beta
+
+beta_dim1 <- betas %>% as.data.frame() %>% 
+  select(Dim1) %>% 
+  arrange(Dim1) %>% 
+  rename(position = Dim1)
+
+beta_dim1 %>% ggplot(aes(x = position)) + 
+  geom_histogram(binwidth = 0.5)+
+  theme_minimal()
+```
+
+Summary:
+```
+The betha´s plot show the words positions in one dimenstion. Extreme positions -2 and 2 are shown as in the first histogram, while moderate (center) positions are more frequent. 
+```
+
+Focusing now on the `betas` can you assign a rough interpretation 
+to the second and third dimensions on the basis of how they 
+order?
+```{r}
+# Dimension 2 Beta
+
+betas_dim2 <- betas %>% as.data.frame() %>% 
+  select(Dim2) %>% 
+  arrange(Dim2) %>% 
+  rename(position = Dim2)
+
+betas_dim2 %>% ggplot(aes(x = position)) + 
+  geom_histogram(binwidth = 0.5)+
+  theme_minimal()
+```
+
+```{r}
+# Dimension 3 Beta
+betas_dim3 <- betas %>% as.data.frame() %>% 
+  select(Dim3) %>% 
+  arrange(Dim3) %>% 
+  rename(position = Dim3)
+
+betas_dim3 %>% ggplot(aes(x = position)) + 
+  geom_histogram(binwidth = 0.5)+
+  theme_minimal()
+```
+Interpretation:
+```
+Histograms of second and third dimensions show a significant high count for center positions (between -2 and 2). Also, some extreme words apear (between 3 and 12) but these don´t have as many counts. 
+
+The first dimensions of thetas and betas show a more diverse pircture. However, when looking at the second and the third dimension of the betas, show a more moderate picture.
+```
+
+## Graphics
+
+Time for a picture. Let's plot the parties and the policy categories
+together in the first two dimensions. It will be helpful to 
+make a data.frame that will make plotting easy for ggplot.
+```{r}
+# stack the betas and thetas with a label noting 
+# which row is which, and a label for the graphic
+plotdata <- data.frame(parameter = c(rep("beta", nrow(betas)),
+                                     rep("theta", nrow(thetas))),
+                       rbind(betas[,1:2], thetas[,1:2])) %>%
+  rownames_to_column(var = "label")
+
+head(plotdata)
+```
+Now we can plot them
+```{r, fig.height = 10, fig.width = 10}
+ggplot(plotdata, aes(Dim1, Dim2, color = parameter, label = label)) +
+  geom_point() +
+  geom_text_repel() +
+  scale_colour_manual(values = list(beta="grey", theta = "black"),
+                      guide = FALSE)
+```
+
+Oof. That's quite busy.
+
+Let's try only plotting the `rile_left` and `rile_right` categories. 
+We'll do this by filtering out all the `rile_none` rows of the data 
+and using the same plot code.
+```{r, fig.height = 10, fig.width = 10}
+filter(plotdata, !(label %in% rile_none)) %>%
+  ggplot(aes(Dim1, Dim2, color = parameter, label = label)) +
+  geom_point() +
+  geom_text_repel() +
+  scale_colour_manual(values = list(beta="grey", theta = "black"),
+                      guide = FALSE)
+```
+
+## Interpretation
+
+Interpretation time. Consider the SPD manifesto in the 2017 election. According 
+to this scaling model, does it emphasize each of the following themes *more* than other parties, *less* than other parties, or about the *same*?
+
+- Political Authority
+- Law and Order
+- Constitutionalism
+- Controlled Economy
+
+Hint: revisit the final parts of the prerecorded video.
+
+Interpretation:
+```
+According to this scaling model, the 2017 manifesto from the SPD doesn't follow much "political authority" than the SPD's manifesto from previous, which were more prone to it. 
+The theme "law and order" also appears far from the SPDS manifesto's tone. It enjoyed more attention from the CDU and the FDP. 
+ The case for a "controlled economy seems to be more appropriate to the Linke and the Greens than for the SPD in 2017. However, the SPD emphasized more this theme than the rest of the parties. 
+"Constitutionalism"  is the most significant in the 2013 SPD manifesto. In 2017, Constitutionalism is still relevant. 
+
+
+In an overall, the SPD manifesto from 2017 seems to be a bit out of the scale compared to the rest of the SPD manifesto taking a slighltly turn on the left. Probably because they saw the vote share decrease as they were part of the grand coalition and they wanted to gain a clearer profile and potentially regroup in the opposition. The candidate was Martin Schulz who was more to the left and because they were in the akward position to compete in an election with the coservatives (although they were part of the same government), so they might have been trying to show a stronger profile in the left.
+
+```
+
+## Time Series plots
+
+We've been collapsing the temporal dimension here. Let's add those nicely formatted
+dates we made earlier to the data and see how the parties look over time in terms of
+the first scaled dimension
+```{r}
+ts_plotdata <- data.frame(date = de$edate, 
+                          party = de$partyabbrev,
+                          position = thetas[,1])
+```
+How about you make the positions over time plot and describe qualitatively what you see
+```{r}
+
+plot_1<-ggplot(ts_plotdata, aes(position, date, color = party, label = party))+
+  geom_point (size=1)+
+  geom_text_repel(size=3,show.legend = FALSE)+
+  labs(colour = "Party",title = "Time Serie Plot Data-Party Position 2002-2007",
+      x = "Position from -2 (very left) to 2 (very right)",
+       y = "Year of observation")
+plot_1
+  
+```
+
+Interpretation:
+```
+In the time series plot we can observe a general trend shift to the left from most of the parties. The AFD, however, presents a change to a more right extreme position. 
+
+```
+
+## Projection
+
+Following the NYT piece, let's (perhaps unwisely) ask the question, where the two main 
+US parties would be if they emphasized what they really do emphasize in their
+platforms but were somehow translated into German and found themselves 
+competing in a Federal Election. 
+
+For this, we'll fit the model to the regular German parties and the project 
+the US parties in based on the German `betas`. We can do this conveniently
+by giving the `ca` function the row numbers of the US parties and asking it
+to treat these as 'supplementary', that is, to define the scaled space without 
+them and then to place them in it.
+
+Most of this code follows the code above, but watch out for the differences
+```{r}
+usde <- filter(cmp20, edate > oldest,
+               countryname %in% c("Germany", "United States"))
+usde_counts <- select(usde, starts_with("per"))
+
+usde_mat <- data.matrix(usde_counts)
+rownames(usde_mat) <- usde$label
+colnames(usde_mat) <- itemcodes$name
+
+# which indices are to be projected?
+extras <- which(usde$countryname == "United States")
+extras
+
+# now fit the model with supplementary rows 
+mod2 <- ca(usde_mat, suprow = extras)
+
+# and extract the positions
+usde_betas <- mod2$colcoord
+usde_thetas <- mod2$rowcoord
+```
+This time you plot it. Note: You *may* find it easier to read if you filter out *all* the betas, not just the `rile_none` ones.
+
+```{r}
+#Preparing the plot data
+plot_usde <- data.frame(parameter = 
+            c(rep("beta", nrow(usde_betas)),
+            rep("theta", nrow(usde_thetas))),
+            rbind(usde_betas[,1:2],
+            usde_thetas[,1:2])) %>%
+            rownames_to_column(var = "label")
+
+#Plot
+
+plot_2<- filter(plot_usde, !(label %in% c(rile_none, rile_right, rile_left))) %>%
+  ggplot(aes(Dim1, Dim2, color = parameter, 
+  label = label)) +
+  geom_point() +
+  geom_text_repel() +
+  scale_colour_manual(values = list(beta="grey",
+  theta = "black"), guide = FALSE)
+
+plot_2
+```
+
+Provide a brief qualitative description of what you see.
+
+Interpretation:
+```
+We can observe an apparent mismatch between the two political country scenarios. While the Democrats in the USA are considered to have a left position, comparing it to the German scenario, this is not the case. The scale-space shows that Democrats match more center positions with the German parties like SPD, FDP, and CDU.  In 2016, we can see a sightly similarity in the manifesto with left German parties and the democrats.
+
+Regarding the Republican party, considered in the USA with the right position, when comparing it with the German setup, the party appears to have significant similarities than those with a far-right role in Germany. 
+
+```
+
+## A more sensible projection?
+
+Assuming the projection question makes sense (it probably does better for 
+some pairs of countries than others, e.g. ones that share an electoral 
+system or some relevant history), now project a *different*, perhaps more reasonable comparison country into the German space and tell us very briefly what you see and 
+whether you think it makes sense.
+
+```{r}
+
+#Data for plot
+cade <- filter(cmp20, edate > oldest, 
+             countryname %in% 
+        c("Germany", "Canada"))
+cade_counts <- select(cade, starts_with("per"))
+
+cade_mat <- data.matrix(cade_counts)
+rownames(cade_mat) <- cade$label
+colnames(cade_mat) <- itemcodes$name
+
+# which indices are to be projected?
+extras1 <- which(cade$countryname == "Canada")
+
+# now fit the model with supplementary rows
+modcade <- ca(cade_mat, suprow = extras1)
+
+# and extract the positions
+cade_betas <- modcade$colcoord
+cade_thetas <- modcade$rowcoord
+
+#Preparing the plot data
+plotcade<- data.frame(parameter = 
+            c(rep("beta", nrow(cade_betas)),
+            rep("theta", nrow(cade_thetas))),
+            rbind(cade_betas[,1:2], cade_thetas[,1:2])) %>%
+            rownames_to_column(var = "label")
+
+plotcade<- plotcade %>%
+  filter(!grepl('PDS|L-PDS|Pirates|NA:', 
+  label))
+
+# Plot 
+
+plot_cade<-ggplot(plotcade, aes(Dim1, Dim2, color = 
+      parameter, label = label)) +
+      geom_point() +
+      geom_text_repel() +
+      scale_colour_manual(values = 
+      list(beta="grey", theta = "black"),
+      guide = FALSE)
+
+plot_3<-filter(plotcade, !(label %in% rile_none)) %>%
+  ggplot(aes(Dim1, Dim2, color = parameter, label = label)) +
+  geom_point() +
+  geom_text_repel() +
+  scale_colour_manual(values = list(beta="grey", theta = "black"),
+                      guide = FALSE)
+
+plot_4<- filter(plotcade, !(label %in% c(rile_none, rile_right, rile_left))) %>%
+  ggplot(aes(Dim1, Dim2, color = parameter, 
+  label = label)) +
+  geom_point() +
+  geom_text_repel() +
+  scale_colour_manual(values = list(beta="grey",
+  theta = "black"), guide = FALSE)
+
+plot_3
+plot_4
+```
+Interpretation:
+```
+In this case, the scale-space shows a the comparison between Germany and Canada. I have chosen Canada after seeing the results from the USA scale-space. In this case the model shows that the scenarios from both countries match better than the last scale-space model. 
+```
+
+## Finally
+
+What do you think is the difference making a space using both countries 
+and making a space with one and projecting another into it? Under what 
+circumstances would these differ?
+
+Interpretation:
+```
+The main difference when creating a space with two countries and a single space for each country is that in the first case, it will probably cause more variance. On the one hand, two countries can have very different political scenes, so without a careful study beforehand, they shouldn´t be compare, as the results will be biased. It shouldn´t be the case if thoughtful research is carried out in both cases. For example, in countries from the same continent or region, it might be preferable as the political scene tends to be similar, even though this is not always the case. 
+On the other hand, making space for just one country can show a more in-depth analysis of the country system. However, sometimes the researcher needs to compared to another country to have a better understanding of it. 
+
+To put in a nutshell, these two method results will give a clear insight into different scenarios if the countries have similar ideological backgrounds.  
+
+```
+
+
+

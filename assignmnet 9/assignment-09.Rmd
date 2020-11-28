@@ -1,0 +1,255 @@
+---
+title: "Assignment 9. Data visualization"
+author: "Anabel Berjón Sánchez"
+date: "11/11/2020"
+output: html_document
+---
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(lubridate)
+library(legislatoR)
+library(data.table)
+library(dotwhisker)
+library(broom)
+library(stargazer)
+library(eeptools)
+library(scales)
+```
+
+
+<br>
+
+## 1. Fetching data on members of the 115th United States Congress
+
+The `legislatoR` package (https://github.com/saschagobel/legislatoR) provides access to the Comparative Legislators Database (CLD). The CLD includes political, sociodemographic, career, online presence, public attention, and visual information (organized in separate tables, very similar to a proper database structure) for over 45,000 contemporary and historical politicians from ten countries.
+
+Install the package (either from CRAN or GitHub) and use it to compile the following data into one dataset:
+
+a) The political data for the 115th session of the US House of Representatives
+b) The data on daily user traffic on individual Wikipedia biographies (use it to compute the average number of daily page views per representative between January 3, 2017 and January 3, 2019 and match the variable to the dataset)
+c) The information on the total number of sessions served by representative (compute it by counting the number of entries in the political table when grouped by representative).
+
+```{r}
+#a)The data for the 115th session of the US House of Representatives
+usa_politicians<-get_core(legislature = "usa_house")
+usa_politicians_subset <- get_political(legislature = "usa_house")%>%
+  filter(session==115)
+  
+usa_politicians_115<-right_join(usa_politicians, usa_politicians_subset, by="pageid")
+
+#b)Add Wikidataid to 'Traffic' table for the US House of Senate
+usa_traf <- get_traffic(legislature = "usa_house")
+usa_traf1 <- subset(usa_traf, date > "2017-01-03" & date < "2019-01-03")
+usa_traf2<- setDT(usa_traf1)[ , .(avg_traffic = mean(traffic)), by = pageid]
+usa_traffic<- merge(usa_politicians_115, usa_traf2, by = "pageid")
+
+
+#c)The data for the total number of sessions
+usa_sessions<-get_political(legislature="usa_house")%>%
+  count(pageid, sort = TRUE, name = "session_count")
+
+#Join data sets
+usa_house_final<-left_join(usa_traffic,usa_sessions, by= "pageid")
+```
+
+<br> 
+
+## 2. Exploring the dataset
+
+Explore the dataset using visual means, following the guidelines of good visualization. Provide three different visualizations. One visualization is entirely up to you. The two others should give any two of the following:
+
+a) gender or ethnicity distribution by party (Democrat/Republican; ignore the others)
+b) age distribution by state in which the representative's district is located (limit to states with 10+ representatives)
+c) top 10 representatives according to average daily page views
+d) log mean page views vs. the number of sessions served
+
+Transform the variables if needed (e.g., categorize continuous variables, pool residual categories into one, etc.).
+
+```{r}
+#A: Ethnicity distribution by party
+
+#Distribution of ethnicity
+ethnicity_distribution<-table(usa_house_final$ethnicity, usa_house_final$party)
+ethnicity_distribution<-as.data.frame(ethnicity_distribution)
+#Renaming variables
+names(ethnicity_distribution)[1]<-paste("Ethnicity")
+names(ethnicity_distribution)[2]<-paste("Party")
+
+#Plotting ethnicity
+plot_ethnicity<-ggplot(subset(ethnicity_distribution,Party %in% c("R" , "D")), aes(x=Party, y=Freq, fill = Ethnicity)) + 
+   geom_bar(stat="identity", position="dodge")+
+    scale_fill_brewer(palette = "Accent") +
+  labs(title = "Ethnicity distribution by party", 
+       subtitle = "115th Sessions of US House of Representatives")+
+  labs(colour = "Ethnicity",
+       x = "Party", 
+       y = "Frequency")
+
+plot_ethnicity
+
+
+#Plot with percentages
+ethnicityplot <- subset(usa_house_final, (party == "D" | party == "R"))
+
+eth_plot<- ggplot(ethnicityplot[!is.na(ethnicityplot$ethnicity),], 
+  aes(x = factor(party), fill = factor(ethnicity))) + 
+  geom_bar(position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2), 
+                     label = percent) +
+ scale_fill_brewer(palette = "Accent") +
+  labs(y = "Percent", 
+       fill = "Ethnicity",
+       x = "Party",
+       title = "Ethnicity distribution by party", 
+       subtitle = "115th Sessions of US House of Representatives") +
+  theme_minimal()
+
+eth_plot
+
+#C: Top 10 representatives according to average daily page views
+# Preparing the data for the plot
+library(scales)
+topviewplot <- usa_house_final %>% 
+                arrange(desc(avg_traffic)) %>% 
+                slice_head(n = 10)
+# Plotting Dot Chart
+top10<- ggplot(topviewplot, 
+      aes(x = avg_traffic, y = reorder(name, avg_traffic))) +
+      geom_point(color="blue", size = 2) +
+      geom_segment(aes(x = 100, xend = avg_traffic, 
+      y = reorder(name, avg_traffic), 
+      yend = reorder(name, avg_traffic)), color = "grey") +
+      labs (x = "Average daily page views",
+      y = "",
+      title = "Top 10 representatives according to average daily page views",
+      subtitle = "115th Sessions of US House of Representatives") +
+      theme_minimal() + 
+      theme(panel.grid.major = element_blank()) +
+      scale_x_continuous(breaks = seq(0, 12000, 1000))
+top10
+
+#OPTIONAL: Pie Chart for religion distribution
+
+#Distribution of religion
+religion_distribution<-table(usa_house_final$religion, usa_house_final$party)
+religion_distribution<-as.data.frame(religion_distribution)
+#Renaming variables
+names(religion_distribution)[1]<-paste("Religion")
+names(religion_distribution)[2]<-paste("Party")
+
+#Filter data by democrats
+democrats<-subset(religion_distribution,Party=="D")
+republicans<-subset(religion_distribution,Party=="R")
+
+#Pie Chart for democrats
+democrats_pie <- democrats%>%
+    count(Religion) %>%
+    arrange(desc(Religion)) %>%
+    mutate(prop = round(democrats$Freq * 100 / sum(democrats$Freq), 1),lab.ypos = cumsum(prop) - 0.5  *prop)
+  
+democrats_pie_plot<- ggplot(democrats_pie, 
+         aes(x = "", 
+             y = prop, 
+             fill = Religion)) +
+    geom_bar(width = 1, 
+             stat = "identity", 
+             color = "black") +
+    coord_polar("y", 
+                start = 0, 
+                direction = -1) +
+  labs(title = "Religion distribution in the Democratic Party", 
+       subtitle = "115th Sessions of US House of Representatives") +
+    theme_void()
+democrats_pie_plot
+
+#Pie Chart for republicans
+republicans_pie<- republicans%>%
+    count(Religion) %>%
+    arrange(desc(Religion)) %>%
+    mutate(prop = round(republicans$Freq * 100 / sum(republicans$Freq), 1),lab.ypos = cumsum(prop) - 0.5  *prop)
+  
+republicans_pie_plot<- ggplot(republicans_pie, 
+         aes(x = "", 
+             y = prop, 
+             fill = Religion)) +
+    geom_bar(width = 1, 
+             stat = "identity", 
+             color = "black") +
+    coord_polar("y", 
+                start = 0, 
+                direction = -1) +
+  labs(title = " Religion distribution in the Republican Party", 
+       subtitle = "115th Sessions of US House of Representatives") +
+    theme_void()
+republicans_pie_plot
+```
+
+
+<br> 
+
+## 3. Modeling page views
+
+Finally, model the log number of mean page views as a function of the following variables: 
+
+  - number of sessions served, 
+  - party membership (Democrat/Republican/Independent)
+  - key political position (a dummy which takes the value 1 if the representative is one of the following: speaker, majority/minority leader/whip)
+  - age
+  - gender
+  - ethnicity (white/non-white)
+
+A linear model is just fine. Present the results of your model in both a table and a coefficient plot!
+
+```{r results = "asis"}
+# Adding the data
+# Filtering the data for parties, D,R and Indepent
+party_model <- subset(usa_house_final, party == "D" | party == "R" | 
+                      party == "Independent")
+
+#Ethnicity (white/non-white)
+nonwhite <- party_model[-grep("white", party_model$ethnicity),]
+nonwhite$ethnicity <- "non-white"
+white <- party_model[grep("white", party_model$ethnicity),]
+eth_model <- rbind(white, nonwhite)
+
+# Including political position 
+position_model <- eth_model %>% mutate(
+  keypp = case_when(
+    house_speaker == TRUE ~ 1,
+    house_majority_leader == TRUE ~ 1,
+    house_majority_whip == TRUE ~ 1,
+    house_minority_leader == TRUE ~ 1,
+    house_minority_whip == TRUE ~ 1,
+  )) 
+position_model$keypp[is.na(position_model$keypp)] <- 0
+
+# Adding age
+final_model <- position_model[c("avg_traffic", "session_count" ,"party", "keypp", "birth", "sex", "ethnicity")]
+final_model$birth <- as.Date(final_model$birth)
+final_model <- na.omit(final_model)
+final_model$age <- floor(age_calc(final_model$birth, units = "years"))
+
+
+# Model fitting
+model1<- lm(log(avg_traffic) ~ session_count + party + keypp +
+            age + sex + ethnicity, data = final_model)
+
+model1
+
+stargazer(model1, title = "Model 1 Results",
+          dep.var.labels=c("Log number of mean page views"),
+          covariate.labels=c("Number of sessions served", "Party", 
+          "Key political position", "Age", "Gender", "Ethnicity"),
+          type = "html")
+
+#Plot 
+model_plot<- dwplot(model1, show_intercept = TRUE, 
+      vline = geom_vline(xintercept = 0,
+      colour = "grey60", linetype = 2)) +
+      theme_bw() + xlab("Coefficient Estimate") +
+      ggtitle("Predicting the log number of mean page views") +
+      theme(legend.position = "none")
+model_plot
+```
+
